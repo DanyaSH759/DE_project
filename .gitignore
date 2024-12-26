@@ -1,13 +1,8 @@
 __pycache__
 
 logs/*
-!logs/
-
 data/*
-!data/
-
 backup/*
-!backup/
 
 Архив_с_работающим_кодом
 

@@ -1,3 +1,5 @@
+--Скрипт для создания всех необходимых таблиц
+
 CREATE table IF NOT EXISTS public.shds_stg_accounts (
     account bpchar(20) PRIMARY KEY,
     valid_to date,
@@ -103,5 +105,16 @@ load_date date,
 id SERIAL PRIMARY KEY
 );
 
+CREATE table IF NOT EXISTS public.shds_rep_fraud (
+    id SERIAL PRIMARY KEY,
+    event_dt varchar(20),
+    passport varchar(20),
+    phone varchar,
+    fio varchar,
+    event_type varchar,
+    report_dt date
+);
+
+--после сооздания таблиц сразу их очистим кроме shds_rep_fraud!!!
 truncate public.shds_stg_accounts, public.shds_stg_cards, public.shds_stg_clients, public.shds_stg_transactions, public.shds_stg_terminals, public.shds_stg_passport_blacklist;
 truncate public.shds_dwh_dim_accounts, public.shds_dwh_dim_cards, public.shds_dwh_dim_clients, public.shds_dwh_dim_transactions, public.shds_dwh_dim_terminals, public.shds_dwh_dim_passport_blacklist;

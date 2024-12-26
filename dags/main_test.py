@@ -1,19 +1,22 @@
-from airflow.models import DAG, Variable
-from airflow.utils.dates import days_ago
+import os
 import logging
-from datetime import datetime, timedelta
+import shutil
 import pytz
+import pandas as pd
+import psycopg2
+
+from datetime import datetime, timedelta
 from sqlalchemy import create_engine, text
 from airflow.operators.python_operator import PythonOperator
-import shutil
-import os
-import pandas as pd
+from airflow.models import DAG
+from airflow.utils.dates import days_ago
 
 
 # логи
 _LOG = logging.getLogger()
 _LOG.addHandler(logging.StreamHandler())
 
+# параметры дага
 DEFAULT_ARGS = {
     "owner": "Shulyak_Danila",
     "retry": 3,
@@ -21,9 +24,48 @@ DEFAULT_ARGS = {
 }
 
 
+# Функция для выполнения SQL-запроса
+def send_sql_query_to_db(query):
+    # Подключение к базе данных PostgreSQL
+    engine = create_engine("postgresql+psycopg2://hseguest:hsepassword@rc1b-o3ezvcgz5072sgar.mdb.yandexcloud.net:6432/db")
 
+    # Проверка соединение
+    with engine.connect() as conn:
+        _LOG.info("Соединение c бд установлено")
+
+    try:
+        with engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                conn.execute(query)
+                trans.commit()
+                _LOG.info("SQL-скрипт выполнен успешно.")
+            except Exception as e:
+                trans.rollback()
+                _LOG.info(f"Ошибка при выполнении SQL-скрипта: {e}")
+                raise
+    except Exception as e:
+        _LOG.info(f"Ошибка подключения или выполнения транзакции: {e}")
+
+    engine.dispose()
+
+
+# Чтение SQL-скрипта из файла и выполнение
+def execute_sql_file(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            sql_script = file.read()
+        query = text(sql_script)
+        send_sql_query_to_db(query)
+    except Exception as e:
+        _LOG.info(f"Ошибка при чтении или выполнении SQL-скрипта: {e}")
+        raise
+
+# функция для загрузки данных из exсel и txt файлов которые мы получаем
 def load_to_dwh(stg_table, dwh_table, primary_key):
-    if stg_table in ['shds_stg_passport_blacklist', 'shds_stg_terminals']: 
+
+    if stg_table in ['shds_stg_passport_blacklist', 'shds_stg_terminals']:
+        # меняем флаки на false если появилась новая запись по старым данным 
         query = text(f"""
             UPDATE {dwh_table}
             SET is_active = False
@@ -42,6 +84,7 @@ def load_to_dwh(stg_table, dwh_table, primary_key):
         send_sql_query_to_db(query)
 
     else:
+        # транзакции достаточно просто загрузить 
         query = text(f"""
             INSERT INTO {dwh_table}
             SELECT *, NOW()::timestamp AS load_date
@@ -50,7 +93,7 @@ def load_to_dwh(stg_table, dwh_table, primary_key):
         send_sql_query_to_db(query)
 
 
-
+# функция по переносу файлов из data в backup
 def move_and_rename_to_backup(file_path, backup_folder):
     try:
         # Создаем папку, если она еще не существует
@@ -64,12 +107,12 @@ def move_and_rename_to_backup(file_path, backup_folder):
 
         # Перемещаем и переименовываем файл
         shutil.move(file_path, new_file_path)
-        print(f"Файл {file_path} успешно перемещен и переименован в {new_file_path}.")
+        _LOG.info(f"Файл {file_path} успешно перемещен и переименован в {new_file_path}.")
     except Exception as e:
-        print(f"Ошибка при перемещении и переименовании файла {file_path}: {e}")
+        _LOG.info(f"Ошибка при перемещении и переименовании файла {file_path}: {e}")
 
-import psycopg2
 
+# функция с циклом по перебору файлов из папки data
 def process_files(input_folder, backup_folder):
 
     # Получение всех файлов в папке
@@ -90,6 +133,7 @@ def process_files(input_folder, backup_folder):
             stg_table = 'shds_stg_terminals'
             dwh_table = 'shds_dwh_dim_terminals'
             primary_key = 'terminal_id'
+
             df = pd.read_excel(file_path)
 
         elif 'transactions' in file_path:
@@ -115,7 +159,7 @@ def process_files(input_folder, backup_folder):
             port="6432"
         )
 
-        #Очистка таблици перед загурзкой данных
+        #Очистка таблицы перед загурзкой данных
         q_t = text(f"""
                    TRUNCATE public.{stg_table}
                    ;""")
@@ -144,39 +188,7 @@ def process_files(input_folder, backup_folder):
 
 
 
-
-
-# Функция для выполнения SQL-запроса
-def send_sql_query_to_db(query):
-    engine = create_engine("postgresql+psycopg2://hseguest:hsepassword@rc1b-o3ezvcgz5072sgar.mdb.yandexcloud.net:6432/db")
-    try:
-        with engine.connect() as conn:
-            trans = conn.begin()
-            try:
-                conn.execute(query)
-                trans.commit()
-                _LOG.info("SQL-скрипт выполнен успешно.")
-            except Exception as e:
-                trans.rollback()
-                _LOG.info(f"Ошибка при выполнении SQL-скрипта: {e}")
-                raise
-    except Exception as e:
-        _LOG.info(f"Ошибка подключения или выполнения транзакции: {e}")
-    engine.dispose()
-
-
-# Чтение SQL-скрипта из файла и выполнение
-def execute_sql_file(file_path):
-    try:
-        with open(file_path, 'r') as file:
-            sql_script = file.read()
-        query = text(sql_script)
-        send_sql_query_to_db(query)
-    except Exception as e:
-        _LOG.info(f"Ошибка при чтении или выполнении SQL-скрипта: {e}")
-        raise
-
-
+# запуск функция через даги
 def init():
     # логирование
     start = datetime.now(pytz.timezone("Europe/Moscow")).strftime("%A, %D, %H:%M")
@@ -191,6 +203,10 @@ def insert_data_from_csv():
     backup_folder = "/opt/airflow/backup/"
     process_files(input_folder, backup_folder)
 
+def  insert_data_rep_fraud():
+    # Выполнение SQL-скрипта из файла для заполнения таблицы shds_rep_fraud
+    execute_sql_file('/opt/airflow/sql_skripts/insert_data_rep_fraud.sql')
+
 
 dag = DAG(
     dag_id = 'insert_data_table',
@@ -204,5 +220,6 @@ dag = DAG(
 task_init = PythonOperator(task_id="init", python_callable=init, dag = dag,)
 task_insert_data_1 = PythonOperator(task_id="insert_data_1", python_callable=insert_dwh_in_db, dag=dag)
 task_insert_data_2 = PythonOperator(task_id="insert_data_2", python_callable=insert_data_from_csv, dag=dag)
+task_insert_data_3 = PythonOperator(task_id="insert_data_3", python_callable=insert_data_rep_fraud, dag=dag)
 
-task_init >> task_insert_data_1 >> task_insert_data_2
+task_init >> task_insert_data_1 >> task_insert_data_2 >> task_insert_data_3

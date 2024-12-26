@@ -1,3 +1,4 @@
+--Просто переносим данные которые хранятся у нас в бд в наши таблички
 INSERT INTO public.shds_stg_accounts
 	SELECT *
 	from info.accounts;
